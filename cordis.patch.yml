@@ -1,0 +1,3 @@
+- insert:
+    - id: agent-personality
+      name: dsh-agent-personality

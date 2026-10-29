@@ -1,0 +1,55 @@
+{
+  "name": "dsh-agent-personality",
+  "version": "2.2.0",
+  "type": "module",
+  "description": "A personality with a signed emotion variable (-10..+10), its own worldview, diary, relationship network and a voice that opens conversations. For DeepSeek Harness.",
+  "license": "MIT",
+  "author": "SugarOriginal",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "personality",
+    "emotion",
+    "roleplay",
+    "character-card"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yimengsuper2432/dsh-agent-personality.git"
+  },
+  "homepage": "https://github.com/yimengsuper2432/dsh-agent-personality#readme",
+  "bugs": {
+    "url": "https://github.com/yimengsuper2432/dsh-agent-personality/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "persona-worker.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "README.en.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}
+
