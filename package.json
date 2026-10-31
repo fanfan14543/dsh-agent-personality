@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-personality",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "type": "module",
   "description": "A personality with a signed emotion variable (-10..+10), its own worldview, diary, relationship network and a voice that opens conversations. For DeepSeek Harness.",
   "license": "MIT",
@@ -16,11 +16,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yimengsuper2432/dsh-agent-personality.git"
+    "url": "git+https://github.com/fanfan14543/dsh-agent-personality.git"
   },
-  "homepage": "https://github.com/yimengsuper2432/dsh-agent-personality#readme",
+  "homepage": "https://github.com/fanfan14543/dsh-agent-personality#readme",
   "bugs": {
-    "url": "https://github.com/yimengsuper2432/dsh-agent-personality/issues"
+    "url": "https://github.com/fanfan14543/dsh-agent-personality/issues"
   },
   "engines": {
     "dsh": ">=0.2.0"
@@ -50,6 +50,12 @@
       "immediately": true,
       "inject": []
     }
-  }
+  },
+  "contributors": [
+    {
+      "name": "fanfan14543",
+      "url": "https://github.com/fanfan14543"
+    }
+  ],
+  "forkedFrom": "https://github.com/yimengsuper2432/dsh-agent-personality"
 }
-

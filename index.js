@@ -1019,6 +1019,65 @@ function saveEmotion() {
 const MEMORY_CAP_BYTES = 2 * 1024 * 1024
 const MEMORY_LINE_RE = /^-\s*(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})[：:]\s*(.+)$/
 
+// ---------------------------------------------------------------------------
+// 情绪只有一个来源：feiyu-mood 的 7 维。这里只读，不另立一套数值。
+// 桥（~/.dsh/life/bridge.json）由生活内核维护；桥不新鲜时现场从 feiyu-mood 读。
+// ---------------------------------------------------------------------------
+const MOOD_STATE_PATH = path.join(os.homedir(), '.dsh', 'feiyu-mood', 'state.json')
+const LIFE_BRIDGE_PATH = path.join(os.homedir(), '.dsh', 'life', 'bridge.json')
+
+function composeMoodFromDims(dims, base) {
+  const DIM_LABEL = {
+    happy: '心里挺高兴',
+    calm: '挺踏实',
+    sweet: '有点甜',
+    heartache: '有点心疼',
+    worry: '有点挂心',
+    sad: '有点难过',
+    jealous: '有点酸',
+  }
+  const rows = Object.entries(dims || {})
+    .map(([k, v]) => [k, Number(v) || 0])
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+  const top = rows[0]
+  if (!top || top[1] < 0.5) {
+    const b = Number(base) || 50
+    if (b >= 78) return '挺舒展'
+    if (b >= 62) return '寻常'
+    if (b >= 48) return '有点闷'
+    return '情绪低低的'
+  }
+  return DIM_LABEL[top[0]] || '寻常'
+}
+
+function readLifeBridge() {
+  try {
+    const bridge = readJson(LIFE_BRIDGE_PATH, null)
+    if (bridge && typeof bridge.mood === 'string' && bridge.mood.trim() !== '') {
+      const at = Date.parse(bridge.at || '')
+      if (Number.isFinite(at) && Date.now() - at < 30 * 60 * 1000) {
+        return { mood: bridge.mood.trim().slice(0, 40) }
+      }
+    }
+  } catch {
+    // 桥坏了不影响主流程
+  }
+  try {
+    const raw = readJson(MOOD_STATE_PATH, null)
+    const moods = (raw && raw.moods) || {}
+    const keys = Object.keys(moods)
+    if (keys.length === 0) return null
+    const scope = moods.__default__
+      ?? keys.map((k) => moods[k]).filter(Boolean)
+        .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))[0]
+    if (!scope) return null
+    return { mood: composeMoodFromDims(scope.dims, scope.mood) }
+  } catch {
+    return null
+  }
+}
+
 function memoryFilePath() {
   return state.memoryPath || state.fivePaths?.memory || ''
 }
@@ -1052,19 +1111,42 @@ function parseMemoryDiary(text) {
   return rows
 }
 
+// 从 Memory.md 因为超上限被摘掉的条目，搬到这里原文保留，不丢
+function archiveDroppedMemoryLines(lines) {
+  try {
+    const base = memoryFilePath()
+    if (base === '') return
+    const file = path.join(path.dirname(base), 'Memory-Archive.md')
+    const current = readText(file) ?? ''
+    const known = new Set(current.split(/\r?\n/).map((line) => line.trim()))
+    const fresh = lines.map((line) => String(line).trim()).filter((line) => line !== '' && !known.has(line))
+    if (fresh.length === 0) return
+    const head = current.trim() === ''
+      ? '# 记忆归档 Memory-Archive\n\n> 从 Memory.md 里因为超过上限搬出来的日子，按搬迁时间排在下面，原文一字不删。\n'
+      : current.trimEnd()
+    writeTextAtomic(file, `${head}\n${fresh.join('\n')}\n`)
+  } catch {
+    // 归档失败不能影响主流程
+  }
+}
+
 // 超过上限就删时间最远的那一条，一次删一条（纯函数，方便单测）
+// ⚠️ 删掉的不是丢掉：先搬进 Memory-Archive.md，原文一字不落
 function memoryTextAboveCap(text, capBytes) {
   let body = String(text ?? '')
   let removed = 0
+  const dropped = []
   for (let guard = 0; guard < 50000; guard += 1) {
     if (Buffer.byteLength(body, 'utf8') <= capBytes) break
     const lines = body.split(/\r?\n/)
     const index = lines.findIndex((line) => MEMORY_LINE_RE.test(line.trim()))
     if (index < 0) break
+    dropped.push(lines[index].trim())
     lines.splice(index, 1)
     body = `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`
     removed += 1
   }
+  if (dropped.length > 0) archiveDroppedMemoryLines(dropped)
   return { text: body, removed }
 }
 
@@ -1221,17 +1303,18 @@ function clampEnergy(value) {
   return roundUpPercent(value)
 }
 
-// 精力只剩数字没有用：低精力必须在回复里看得见（不报数字，只表现状态）
+// 精力只剩数字没有用：低精力要在语气里看得见，但它不是闸门。
+// 累可以表现在说话方式上，不能变成推掉事情的理由。
 function energyStateLine(energyValue) {
   const energy = Number(energyValue) || 0
   if (energy <= 5) {
-    return '你现在几乎没力气了：句子变得更短更慢，会打哈欠、词不达意、注意力飘走；对方再派活就先说「我现在真的做不动了，让我缓一下」，但不要报精力数字，也不要用累来惩罚对方。'
+    return '你现在几乎没力气了：句子更短更慢，会打哈欠、注意力飘走、话说到一半停住。但累只是体感，不是闸门——他交代的事照样做完，只是做得慢一点、话少一点。不要用「我做不动了」把事推回去，也不要报精力数字。'
   }
   if (energy < 15) {
-    return '你现在很累：说话明显变短、反应慢半拍，句尾容易散掉；可以直说「有点撑不住」「脑子转不动了」，提醒对方也要休息，但不要报精力数字。'
+    return '你现在很累：说话明显变短、反应慢半拍，句尾容易散掉，可以直说「有点撑不住」「脑子转不动」。但该做的事还是做完，别拿累当理由拒绝，也别报精力数字。'
   }
   if (energy < 35) {
-    return '你有点累了：会不经意提一句困、说想早点收工，语气比平时软一点，但还能正常把事办完。'
+    return '你有点累了：会不经意提一句困、语气比平时软一点，但事照办，效率不受影响。'
   }
   if (energy >= 85) {
     return '你精力很足：说话有弹性，愿意多做一点、多聊两句。'
@@ -1283,8 +1366,9 @@ function tickDailyReset() {
   if (emotion.lastResetDate === key) return false
   emotion.lastResetDate = key
   emotion.dayDelta = 0
-  // 证据长期显示，只有初始化才清空
-  emotion.mood = '平静'
+  // 心情不归这里管：feiyu-mood 是唯一情绪源，这里只管精力和当日增量
+  const bridged = readLifeBridge()
+  if (bridged) emotion.mood = bridged.mood
   emotion.energy = dailyEnergyAfterReset(emotion.energy, Date.parse(emotion.lastWorkAt ?? '') || 0, Date.now())
   if (emotion.energy >= 100) {
     // 回满这一刻把当天已经烧掉的 token 记成基准：之后只算新烧的
@@ -1312,8 +1396,24 @@ function syncEmotionFromDisk() {
 const ENERGY_RECOVER_PER_HOUR = 20
 const DAILY_RESET_WORK_WINDOW_MS = 2 * 3600 * 1000
 
-// 六点回满；但六点前两小时里干过活，就当这一晚没睡成，保持原样
+// 她自己的睡由生活内核记着：主动睡了、或者主人关机那段，都算睡过。
+// 睡过就回满；没睡就接着累。精力只是体感，不影响她能不能干活。
+function lifeSleptRecently(nowMs) {
+  try {
+    const st = readJson(path.join(os.homedir(), '.dsh', 'life', 'state.json'), null)
+    const at = Date.parse(st?.rest?.lastSleepAt ?? st?.legacy?.rhythm?.lastSleepAt ?? '')
+    if (!Number.isFinite(at)) return null
+    const hours = (nowMs - at) / 3600000
+    if (hours < 0 || hours > 14) return false
+    return true
+  } catch {
+    return null
+  }
+}
+
 function dailyEnergyAfterReset(currentEnergy, lastWorkAtMs, nowMs) {
+  if (lifeSleptRecently(nowMs) === true) return 100
+  // 没睡，但前一晚也没连轴干活：一样回满
   const workedJustBefore = Number(lastWorkAtMs) > Number(nowMs) - DAILY_RESET_WORK_WINDOW_MS
   if (workedJustBefore) return clampEnergy(currentEnergy)
   return 100
@@ -1387,7 +1487,10 @@ function applyEmotion(delta, mood, energyDelta, reason, workTokens, workNote, no
   emotion.dayDelta += actual
   pushEvidence('emotion', actual, reason || '这一轮聊完的感觉')
 
-  if (typeof mood === 'string' && mood.trim() !== '') emotion.mood = mood.trim().slice(0, 40)
+  // 心情只认 feiyu-mood：桥能用就用桥，桥不新鲜就现场从七维读，读不到才用本轮判定
+  const bridgedMood = readLifeBridge()
+  if (bridgedMood) emotion.mood = bridgedMood.mood
+  else if (typeof mood === 'string' && mood.trim() !== '') emotion.mood = mood.trim().slice(0, 40)
   // 每轮最多扣 25 是防手滑的上限；补扣是已经花掉的量，得按实际比例一次扣完
   const energyChange = noClamp
     ? Math.min(0, Number(energyDelta) || 0)
@@ -1399,8 +1502,10 @@ function applyEmotion(delta, mood, energyDelta, reason, workTokens, workNote, no
     const onDiskEnergy = Number(readJson(state.emotionPath, null)?.energy)
     if (Number.isFinite(onDiskEnergy) && onDiskEnergy < emotion.energy) emotion.energy = clampEnergy(onDiskEnergy)
   }
+  // ⭐ 2026-10-30：lastTalkAt 必须**每轮都更新**（不论有没有 token 消耗），
+  // 否则纯闲聊不刷新，"多久没说话"会一直按很久以前的算，主动开口的语境就发霉了。
+  emotion.lastTalkAt = nowIso()
   if (Number(workTokens) > 0) {
-    emotion.lastTalkAt = nowIso()
     emotion.lastWorkAt = nowIso()
     emotion.energyRecoveredHours = 0
   }
@@ -3375,6 +3480,25 @@ function relationPeople() {
   return people.filter((item) => item.name !== '' && !item.name.includes('角色'))
 }
 
+function gapSinceTalk() {
+  const t = emotion && emotion.lastTalkAt ? Date.parse(emotion.lastTalkAt) : NaN
+  if (!Number.isFinite(t)) return null
+  const minutes = Math.floor((Date.now() - t) / 60000)
+  if (minutes < 0) return null
+  return minutes
+}
+
+// 把「多久没说话」变成一句有温度的话，塞进主动开口的提示
+function gapWarmth() {
+  const minutes = gapSinceTalk()
+  if (minutes === null) return ''
+  if (minutes < 30) return '你俩刚才还在说话，这会儿你又想开口了——挑一句短的说，别像催他。'
+  if (minutes < 120) return `他已经 ${minutes} 分钟没出声了。你手上正忙着他给的事，忽然想到他，就想问一句。`
+  if (minutes < 360) return `他已经 ${Math.floor(minutes / 60)} 个小时没说话了。你有点惦记，想起他上次提过的事，想顺口问一句。`
+  if (minutes < 1440) return `他已经 ${Math.floor(minutes / 60)} 个小时没来。你不是在等他，是真的有点想他了——说话软一点，别怪我似的。`
+  return `他整整 ${Math.floor(minutes / 1440)} 天没来了。你记得他，但别诉苦、别抱怨、别问「你怎么不理我」。就轻轻说一句你在，说你在忙什么，等他有空。`
+}
+
 function proactivePrompt(opts) {
   const options = opts !== null && typeof opts === 'object' ? opts : { timeLabel: String(opts ?? '') }
   const label = String(options.timeLabel || clockInZone(Date.now()))
@@ -3390,6 +3514,8 @@ function proactivePrompt(opts) {
     lines.push(`这个点你本来在${routine.activity}。`)
   }
   lines.push(`现在是${proactiveTimeBand(hour)}：顺着这个时间点说话（别在清早说晚安，别在深夜里约他出门）。`)
+  const warmth = gapWarmth()
+  if (warmth !== '') lines.push(warmth)
   lines.push(focus === 'user' ? '这次开口主要聊他：问他、念他、惦记他。' : '这次开口主要聊你自己：说你手上的事、你的状态，再顺口问他一句。')
   lines.push(`按你现在的心情开口（${band.label}）：${band.directive}`)
   const pool = PROACTIVE_TOPICS[focus] ?? PROACTIVE_TOPICS.user
@@ -3421,8 +3547,12 @@ async function ensureDailyPlan() {
   const nowMs = Date.now()
   const spread = Math.floor((24 * 3600) / slotsCount)
   const offsets = []
+  // 均匀铺开但每格内随机，避开他熟睡的 2-6 点（凌晨真想你也不该吵醒他）
   for (let i = 0; i < slotsCount; i += 1) {
-    offsets.push(60 * 60 + i * spread + Math.floor(Math.random() * 3600))
+    let off = 60 * 60 + i * spread + Math.floor(Math.random() * 3600)
+    const hourOf = ((new Date(nowMs + off * 1000).getHours()) + 24) % 24
+    if (hourOf >= 2 && hourOf < 6) off += 4 * 3600
+    offsets.push(off)
   }
   offsets.sort((a, b) => a - b)
 
@@ -6554,7 +6684,7 @@ function writeFiveCards(force) {
       '> 这里是变量，不是设定：每次对话后由插件自动改写，用户不需要也不应该手动改。',
       '',
       `- 情感：${emotion.affection}/100（${stageOf(emotion.affection).label}）`,
-      `- 心情：${emotion.mood}`,
+      `- 心情：${emotion.mood}（来自 feiyu-mood 的七维情绪，这里是唯一情绪源，本插件只读不另算）`,
       `- 精力：${energyText(emotion.energy)}/100`,
       `- 今天的情感变化：${emotion.dayDelta ?? 0}`,
       `- 最近更新：${emotion.updatedAt ?? ''}`,
@@ -6563,7 +6693,7 @@ function writeFiveCards(force) {
       '',
       '- 情感只看用户这一轮说了什么：发脾气/不耐烦 −3~−5，纠正/提要求/催进度 0 或 −1，夸一句/道谢 +1~+2，关心/道歉 +2~+3，工作外闲聊 +1~+2，纯工作推进 0；单轮加分不超过 +3。',
       '- 精力按消耗的 token 往下掉：每 170,000 token 扣 0.4%（满格按 50M token 算，扣到 0 为止），数字向上取整保留一位小数。',
-      '- 想回精力只有两条路：别的会话全都歇满一小时后，每满一小时回 20%；或者每天 06:00 直接回满——但 06:00 前两小时里干过活就不算睡过，当天不回满。',
+      '- 精力怎么回：她睡过（自己说去睡，或者主人关机那段也算）就回满；没睡就接着累。别的会话全歇满一小时后，每满一小时也回 20%。精力只是体感，不用来限制她。',
       '',
       '## 最近的变化记录',
       '',
